@@ -59,6 +59,16 @@ test "dataset initialization" {
     try testing.expectEqual(@as(u64, 0x145a5091f7853099), cache.datasetItem(30000000)[0]);
 }
 
+test "batched dataset items match single items" {
+    const cache = try rx.Cache.create(testing.allocator, .{});
+    defer cache.destroy(testing.allocator);
+    cache.init("test key 000");
+    var items: [16][8]u64 = undefined;
+    cache.datasetItems(16, 10000000 - 3, &items);
+    for (items, 0..) |item, k| try testing.expectEqual(cache.datasetItem(10000000 - 3 + k), item);
+    try testing.expectEqual(@as(u64, 0x7943a1f6186ffb72), items[3][0]);
+}
+
 test "AesGenerator1R" {
     var state: [64]u8 = @splat(0);
     _ = try std.fmt.hexToBytes(state[0..32], "6c19536eb2de31b6c0065f7f116e86f960d8af0c57210a6584c3237b9d064dc7");
@@ -80,12 +90,12 @@ const hash_cases = [_]HashCase{
     .{ .key = "test key 001", .hex_input = true, .input = "0b0b98bea7e805e0010a2126d287a2a0cc833d312cb786385a7c2f9de69d25537f584a9bc9977b00000000666fd8753bf61a8631f12984e3fd44f4014eca629276817b56f32e9b68bd82f416", .want = "c8e92c5f7c1946fecf06bc382b92e3111da38ee3e6a5ad90704e1a9d8aaf6e76" },
 };
 
-test "hash test vectors (light mode, JIT)" {
+fn checkHashVectors(options: rx.Options) !void {
     const gpa = testing.allocator;
     const cache = try rx.Cache.create(gpa, .{});
     defer cache.destroy(gpa);
     var last_key: []const u8 = "";
-    const vm = try rx.Vm.create(gpa, .{ .light = cache }, .{});
+    const vm = try rx.Vm.create(gpa, .{ .light = cache }, options);
     defer vm.destroy(gpa);
     for (hash_cases) |c| {
         if (!std.mem.eql(u8, c.key, last_key)) {
@@ -99,6 +109,38 @@ test "hash test vectors (light mode, JIT)" {
         var want: [32]u8 = undefined;
         _ = try std.fmt.hexToBytes(&want, c.want);
         try testing.expectEqualSlices(u8, &want, &out);
+    }
+}
+
+test "hash test vectors (light mode, JIT)" {
+    try checkHashVectors(.{});
+}
+
+test "hash test vectors (light mode, interpreter)" {
+    try checkHashVectors(.{ .jit = false });
+}
+
+test "interpreter matches the JIT on random inputs" {
+    const gpa = testing.allocator;
+    const cache = try rx.Cache.create(gpa, .{});
+    defer cache.destroy(gpa);
+    cache.init("interpreter vs JIT");
+    const jit_vm = try rx.Vm.create(gpa, .{ .light = cache }, .{});
+    defer jit_vm.destroy(gpa);
+    const int_vm = try rx.Vm.create(gpa, .{ .light = cache }, .{ .jit = false });
+    defer int_vm.destroy(gpa);
+
+    var prng = std.Random.DefaultPrng.init(0x5eed);
+    const random = prng.random();
+    var input: [128]u8 = undefined;
+    for (0..8) |_| {
+        const len = random.uintAtMost(usize, input.len);
+        random.bytes(input[0..len]);
+        var a: [32]u8 = undefined;
+        var b: [32]u8 = undefined;
+        jit_vm.hash(input[0..len], &a);
+        int_vm.hash(input[0..len], &b);
+        try testing.expectEqualSlices(u8, &a, &b);
     }
 }
 

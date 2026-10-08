@@ -2,8 +2,8 @@
 //! `key_hex input_hex hash_hex` ("-" for empty) on stdin, recomputes each
 //! hash and reports mismatches.
 //!
-//!   ref_hashes 20 500 1 | randomx-verify [--fast] [--threads N]
-//!   randomx-verify --dump-dataset KEY [--threads N] > dataset.bin
+//!   ref_hashes 20 500 1 | randomx-verify [--fast] [--interpret] [--threads N]
+//!   randomx-verify --dump-dataset KEY [--interpret] [--threads N] > dataset.bin
 //!   ref_superscalar 100000 1000000 1 | randomx-verify --superscalar
 
 const std = @import("std");
@@ -14,11 +14,13 @@ pub fn main(init: std.process.Init) !u8 {
     const io = init.io;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     var fast = false;
+    var options: randomx.Options = .{};
     var dump_key: ?[]const u8 = null;
     var threads: usize = std.Thread.getCpuCount() catch 1;
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         if (std.mem.eql(u8, args[i], "--fast")) fast = true;
+        if (std.mem.eql(u8, args[i], "--interpret")) options.jit = false;
         if (std.mem.eql(u8, args[i], "--dump-dataset") and i + 1 < args.len) {
             i += 1;
             dump_key = args[i];
@@ -38,7 +40,7 @@ pub fn main(init: std.process.Init) !u8 {
         defer vm.destroy(gpa);
         var h: [32]u8 = undefined;
         vm.hash("This is a test", &h);
-        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = args[2], .data = vm.compiler.code });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = args[2], .data = vm.compiler.?.code });
         return 0;
     }
 
@@ -48,7 +50,7 @@ pub fn main(init: std.process.Init) !u8 {
         const cache = try randomx.Cache.create(gpa, .{});
         defer cache.destroy(gpa);
         cache.init(key);
-        const ds = try randomx.Dataset.create(gpa, .{});
+        const ds = try randomx.Dataset.create(gpa, options);
         defer ds.destroy(gpa);
         try ds.init(cache, threads);
         try std.Io.File.stdout().writeStreamingAll(io, ds.memory);
@@ -64,7 +66,7 @@ pub fn main(init: std.process.Init) !u8 {
 
     var dataset: ?*randomx.Dataset = null;
     defer if (dataset) |ds| ds.destroy(gpa);
-    if (fast) dataset = try randomx.Dataset.create(gpa, .{});
+    if (fast) dataset = try randomx.Dataset.create(gpa, options);
     const cache = try randomx.Cache.create(gpa, .{});
     defer cache.destroy(gpa);
     var vm: ?*randomx.Vm = null;
@@ -88,7 +90,7 @@ pub fn main(init: std.process.Init) !u8 {
             current_key = key_buf[0..key.len];
             cache.init(key);
             if (dataset) |ds| try ds.init(cache, threads);
-            if (vm == null) vm = try randomx.Vm.create(gpa, if (dataset) |ds| .{ .fast = ds } else .{ .light = cache }, .{});
+            if (vm == null) vm = try randomx.Vm.create(gpa, if (dataset) |ds| .{ .fast = ds } else .{ .light = cache }, options);
             keys += 1;
         }
 

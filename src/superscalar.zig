@@ -563,3 +563,28 @@ pub fn execute(r: *[8]u64, prog: *const Program) void {
         }
     }
 }
+
+/// `execute` on `n` register sets at once: one instruction dispatch serves
+/// every set, which makes the portable dataset build much faster.
+pub fn executeMany(comptime n: usize, rs: *[n][8]u64, prog: *const Program) void {
+    for (prog.slice(), 0..) |ins, i| {
+        switch (@as(Op, @enumFromInt(ins.opcode))) {
+            inline else => |op| for (rs) |*r| {
+                const d = &r[ins.dst];
+                const s = r[ins.src];
+                switch (op) {
+                    .isub_r => d.* -%= s,
+                    .ixor_r => d.* ^= s,
+                    .iadd_rs => d.* +%= s << ins.modShift(),
+                    .imul_r => d.* *%= s,
+                    .iror_c => d.* = std.math.rotr(u64, d.*, ins.imm32),
+                    .iadd_c7, .iadd_c8, .iadd_c9 => d.* +%= signExtend(ins.imm32),
+                    .ixor_c7, .ixor_c8, .ixor_c9 => d.* ^= signExtend(ins.imm32),
+                    .imulh_r => d.* = mulh(d.*, s),
+                    .ismulh_r => d.* = smulh(d.*, s),
+                    .imul_rcp => d.* *%= prog.reciprocals[i],
+                }
+            },
+        }
+    }
+}

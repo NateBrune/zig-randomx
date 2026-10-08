@@ -19,6 +19,10 @@ pub const Options = struct {
     /// Use huge pages when available: explicit first, then transparent.
     /// Falls back to normal pages silently.
     huge_pages: bool = true,
+    /// Compile programs (and dataset initialization) to x86-64 machine code.
+    /// When false, an interpreter runs them instead: much slower, but no
+    /// executable memory is mapped. Used by `Vm.create` and `Dataset.create`.
+    jit: bool = true,
 };
 
 pub const PageKind = enum {

@@ -1,7 +1,8 @@
 //! Verifies the RandomX v2 test vectors and measures single-thread hash speed.
 //!
-//!   randomx-bench [--light] [--hashes N] [--threads N] [--no-huge-pages] [--chain]
+//!   randomx-bench [--light] [--interpret] [--hashes N] [--threads N] [--no-huge-pages] [--chain]
 //!
+//! --interpret runs programs (and dataset initialization) without the JIT.
 //! --chain hashes sequentially (x = hash(x)), as a time-lock would; the
 //! default hashes independent nonces, one at a time (no pipelining).
 
@@ -28,6 +29,10 @@ pub fn main(init: std.process.Init) !u8 {
     while (i < args.len) : (i += 1) {
         if (std.mem.eql(u8, args[i], "--light")) {
             light = true;
+        } else if (std.mem.eql(u8, args[i], "--interpret")) {
+            options.jit = false;
+        } else if (std.mem.eql(u8, args[i], "--interpret")) {
+            options.jit = false;
         } else if (std.mem.eql(u8, args[i], "--chain")) {
             chain = true;
         } else if (std.mem.eql(u8, args[i], "--no-huge-pages")) {
@@ -102,8 +107,9 @@ pub fn main(init: std.process.Init) !u8 {
         }
     }
     const ms = since(io, &t);
-    try out.print("{s} mode, {s}: {d} hashes in {d} ms = {d:.1} H/s on one thread\n", .{
+    try out.print("{s} mode, {s}, {s}: {d} hashes in {d} ms = {d:.1} H/s on one thread\n", .{
         if (light) "light" else "fast",
+        if (options.jit) "JIT" else "interpreter",
         if (chain) "chained" else "independent",
         hashes,
         ms,

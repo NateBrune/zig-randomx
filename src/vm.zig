@@ -1,5 +1,6 @@
-//! The RandomX v2 virtual machine, executed through the x86-64 JIT
-//! (virtual_machine.cpp, vm_compiled.cpp, vm_compiled_light.cpp, randomx.cpp).
+//! The RandomX v2 virtual machine, executed through the x86-64 JIT or the
+//! interpreter (virtual_machine.cpp, vm_compiled.cpp, vm_compiled_light.cpp,
+//! vm_interpreted.cpp, randomx.cpp).
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -9,6 +10,7 @@ const Cache = @import("cache.zig").Cache;
 const Dataset = @import("dataset.zig").Dataset;
 const Instruction = @import("instruction.zig").Instruction;
 const jit = @import("jit/x86.zig");
+const interpreter = @import("interpreter.zig");
 const memory = @import("memory.zig");
 const Blake2b512 = std.crypto.hash.blake2.Blake2b512;
 const Blake2b256 = std.crypto.hash.blake2.Blake2b256;
@@ -45,7 +47,9 @@ pub const Vm = struct {
     dataset_offset: u64,
     scratchpad: []align(std.heap.page_size_min) u8,
     scratchpad_region: memory.Region,
-    compiler: jit.Compiler,
+    /// Null when the interpreter runs programs (`Options.jit = false`).
+    compiler: ?jit.Compiler,
+    bytecode: interpreter.Program,
     source: Source,
     /// Cache generation the SuperscalarHash code was compiled for (light mode).
     compiled_generation: u64,
@@ -57,14 +61,14 @@ pub const Vm = struct {
         self.scratchpad_region = try memory.alloc(config.scratchpad_l3, options);
         errdefer self.scratchpad_region.free();
         self.scratchpad = self.scratchpad_region.bytes;
-        self.compiler = try jit.Compiler.init();
+        self.compiler = if (options.jit) try jit.Compiler.init() else null;
         self.source = source;
         self.compiled_generation = 0;
         return self;
     }
 
     pub fn destroy(self: *Vm, gpa: std.mem.Allocator) void {
-        self.compiler.deinit();
+        if (self.compiler) |*c| c.deinit();
         self.scratchpad_region.free();
         gpa.destroy(self);
     }
@@ -75,10 +79,10 @@ pub const Vm = struct {
         switch (self.source) {
             .light => |cache| {
                 std.debug.assert(cache.generation != 0); // Cache.init was never called
-                if (cache.generation != self.compiled_generation) {
-                    self.compiler.generateSuperscalarHash(&cache.programs);
+                if (self.compiler) |*c| if (cache.generation != self.compiled_generation) {
+                    c.generateSuperscalarHash(&cache.programs);
                     self.compiled_generation = cache.generation;
-                }
+                };
             },
             .fast => {},
         }
@@ -103,17 +107,22 @@ pub const Vm = struct {
     fn run(self: *Vm, seed: *const [64]u8) void {
         aes.fill4Rx4(seed, std.mem.asBytes(&self.program));
         self.initialize();
+        const compiler = if (self.compiler) |*c| c else {
+            interpreter.decode(&self.bytecode, &self.program.instructions);
+            interpreter.execute(&self.bytecode, &self.reg, self.mem.ma, self.mem.mx, self.pcfg, self.scratchpad, self.source, self.dataset_offset, config.program_iterations);
+            return;
+        };
         switch (self.source) {
             .fast => |ds| {
-                self.compiler.generateProgram(&self.program.instructions, self.pcfg);
+                compiler.generateProgram(&self.program.instructions, self.pcfg);
                 self.mem.memory = ds.memory.ptr + self.dataset_offset;
             },
             .light => |cache| {
-                self.compiler.generateProgramLight(&self.program.instructions, self.pcfg, self.dataset_offset);
+                compiler.generateProgramLight(&self.program.instructions, self.pcfg, self.dataset_offset);
                 self.mem.memory = cache.bytes().ptr;
             },
         }
-        self.compiler.programFn()(&self.reg, &self.mem, self.scratchpad.ptr, config.program_iterations);
+        compiler.programFn()(&self.reg, &self.mem, self.scratchpad.ptr, config.program_iterations);
     }
 
     fn initialize(self: *Vm) void {

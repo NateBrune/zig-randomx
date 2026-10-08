@@ -2,7 +2,8 @@
 
 A port of [RandomX](https://github.com/tevador/RandomX), the proof-of-work
 algorithm used by Monero, to Zig. It implements **RandomX v2** with an
-**x86-64 JIT compiler**, and matches the official test vectors bit for bit.
+**x86-64 JIT compiler** and an **interpreter**, and matches the official test
+vectors bit for bit.
 
 ```zig
 const randomx = @import("randomx");
@@ -32,6 +33,15 @@ const vm = try randomx.Vm.create(gpa, .{ .fast = dataset }, .{});
 Changing the key (`cache.init` again) is picked up automatically by
 light-mode VMs. A fast-mode dataset has to be rebuilt.
 
+To run without the JIT, pass `.jit = false` to `Vm.create` and
+`Dataset.create`. Nothing executable is mapped then, so this works under
+policies that forbid writable and executable memory (strict SELinux
+`execmem`, for example). The hashes are identical; it is just slower:
+
+```zig
+const vm = try randomx.Vm.create(gpa, .{ .light = cache }, .{ .jit = false });
+```
+
 ## Using it in a project
 
 ```sh
@@ -51,16 +61,16 @@ Requires Zig 0.16.
 |---|---|
 | RandomX v2 (384-instruction programs, AES-mixed F/E, CFROUND tweak, 2-ahead prefetch) | ✓ |
 | x86-64 JIT (programs, SuperscalarHash, dataset init) | ✓ |
+| Interpreter (`.jit = false`: programs, SuperscalarHash, dataset init) | ✓ |
 | Light mode (256 MiB) and fast mode (2 GiB dataset) | ✓ |
 | RandomX v1 | not implemented |
-| Interpreter / non-x86-64 targets (ARM64, RISC-V JITs) | not implemented |
+| Non-x86-64 targets (ARM64, RISC-V) | not implemented: the interpreter's float ops and MXCSR handling are x86-64 asm |
 | Software AES | not implemented: needs a CPU with AES-NI |
 | Huge pages: explicit (`MAP_HUGETLB`), then transparent | ✓ |
 | W^X ("secure") JIT mode, hash pipelining | not yet |
 
-The JIT buffer is mapped read-write-execute. Systems that forbid that
-(strict SELinux `execmem` policies, for example) will need the W^X mode
-added first.
+The JIT buffer is mapped read-write-execute. On systems that forbid that
+(strict SELinux `execmem` policies, for example) use the interpreter.
 
 ## Verification
 
@@ -71,7 +81,9 @@ reference implementation's `src/tests/tests.cpp`:
 - the SuperscalarHash generator (10 program hashes) and reciprocals
 - dataset items, from the cache and from the JIT dataset builder
 - `AesGenerator1R`
-- the five RandomX v2 hash vectors (1a–1e)
+- the five RandomX v2 hash vectors (1a–1e), through the JIT and the
+  interpreter
+- the interpreter against the JIT on random inputs
 
 ### Differential testing against the reference
 
@@ -102,7 +114,7 @@ gives the same result.
 
 `zig build bench -Doptimize=ReleaseFast` builds the full dataset, re-checks
 the vectors in fast mode, and measures single-thread speed (`--light`,
-`--hashes N`, `--threads N`, `--no-huge-pages`, `--chain`).
+`--interpret`, `--hashes N`, `--threads N`, `--no-huge-pages`, `--chain`).
 
 Single-thread, unpipelined, RandomX v2 fast mode on an Intel Core i5-7200U
 (2 cores, 2016 laptop), two interleaved rounds:
@@ -120,6 +132,32 @@ reference within about 2% in both configurations. Huge pages make both
 about 45% faster, because the random dataset and scratchpad reads stop
 missing the TLB. Chaining hashes (`x = hash(x)`, `--chain`) runs at the same
 speed as independent inputs.
+
+### Interpreter
+
+`src/interpreter.zig` decodes each program into a bytecode, as the
+reference's bytecode machine does: operand kinds, address masks, CBRANCH
+targets and reciprocals are worked out once per program, not once per
+iteration. The float operations whose results depend on rounding (add, sub,
+mul, div, sqrt) are single SSE2 instructions in inline assembly, so they
+run under the MXCSR that CFROUND sets. They also get the same
+flush-to-zero behaviour as the JIT. Without the JIT, the dataset is built by
+running each SuperscalarHash program on 16 items at once, which shares the
+instruction dispatch between them (about 7× faster than one item at a time).
+
+Besides the unit tests, 2,000 fast-mode hashes of random inputs (0–300
+bytes) were compared between the JIT and the interpreter: all identical.
+
+Same i5-7200U, transparent huge pages, one thread:
+
+| | JIT | interpreter |
+|---|---|---|
+| fast mode | 307 H/s | 49 H/s |
+| light mode | 69 H/s | 2 H/s |
+| dataset init (4 threads) | 9 s | 54 s |
+
+Light mode is the slow case: each iteration computes a dataset item through
+eight interpreted SuperscalarHash programs.
 
 ### Huge pages
 
@@ -160,6 +198,7 @@ fast mode the cache is only used while the dataset is being built.
 | `src/vm.zig` | `virtual_machine.cpp`, `vm_compiled*.cpp`, `randomx.cpp` |
 | `src/jit/x86.zig` | `jit_compiler_x86.cpp` |
 | `src/jit/x86_static.S` | `jit_compiler_x86_static.S`, `asm/*.inc` |
+| `src/interpreter.zig` | `bytecode_machine.cpp`, `vm_interpreted.cpp` |
 
 ## License
 
