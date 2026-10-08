@@ -35,7 +35,7 @@ light-mode VMs. A fast-mode dataset has to be rebuilt.
 ## Using it in a project
 
 ```sh
-zig fetch --save git+https://github.com/<you>/zig-randomx
+zig fetch --save git+https://github.com/NateBrune/zig-randomx
 ```
 
 ```zig
