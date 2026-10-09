@@ -41,9 +41,9 @@ test "SuperscalarHash generator" {
 
 test "reciprocal" {
     const cases = [_][2]u64{
-        .{ 3, 12297829382473034410 },     .{ 13, 11351842506898185609 },
-        .{ 33, 17887751829051686415 },    .{ 65537, 18446462603027742720 },
-        .{ 15000001, 10316166306300415204 }, .{ 3845182035, 10302264209224146340 },
+        .{ 3, 12297829382473034410 },         .{ 13, 11351842506898185609 },
+        .{ 33, 17887751829051686415 },        .{ 65537, 18446462603027742720 },
+        .{ 15000001, 10316166306300415204 },  .{ 3845182035, 10302264209224146340 },
         .{ 0xffffffff, 9223372039002259456 },
     };
     for (cases) |c| try testing.expectEqual(c[1], rx.superscalar.reciprocal(@intCast(c[0])));
@@ -90,6 +90,15 @@ const hash_cases = [_]HashCase{
     .{ .key = "test key 001", .hex_input = true, .input = "0b0b98bea7e805e0010a2126d287a2a0cc833d312cb786385a7c2f9de69d25537f584a9bc9977b00000000666fd8753bf61a8631f12984e3fd44f4014eca629276817b56f32e9b68bd82f416", .want = "c8e92c5f7c1946fecf06bc382b92e3111da38ee3e6a5ad90704e1a9d8aaf6e76" },
 };
 
+// RandomX v1 expectations from the same tests ("interpreter" / "compiler").
+const hash_cases_v1 = [_]HashCase{
+    .{ .key = "test key 000", .input = "This is a test", .want = "639183aae1bf4c9a35884cb46b09cad9175f04efd7684e7262a0ac1c2f0b4e3f" },
+    .{ .key = "test key 000", .input = "Lorem ipsum dolor sit amet", .want = "300a0adb47603dedb42228ccb2b211104f4da45af709cd7547cd049e9489c969" },
+    .{ .key = "test key 000", .input = "sed do eiusmod tempor incididunt ut labore et dolore magna aliqua", .want = "c36d4ed4191e617309867ed66a443be4075014e2b061bcdaf9ce7b721d2b77a8" },
+    .{ .key = "test key 001", .input = "sed do eiusmod tempor incididunt ut labore et dolore magna aliqua", .want = "e9ff4503201c0c2cca26d285c93ae883f9b1d30c9eb240b820756f2d5a7905fc" },
+    .{ .key = "test key 001", .hex_input = true, .input = "0b0b98bea7e805e0010a2126d287a2a0cc833d312cb786385a7c2f9de69d25537f584a9bc9977b00000000666fd8753bf61a8631f12984e3fd44f4014eca629276817b56f32e9b68bd82f416", .want = "c56414121acda1713c2f2a819d8ae38aed7c80c35c2a769298d34f03833cd5f1" },
+};
+
 fn checkHashVectors(options: rx.Options) !void {
     const gpa = testing.allocator;
     const cache = try rx.Cache.create(gpa, .{});
@@ -97,7 +106,11 @@ fn checkHashVectors(options: rx.Options) !void {
     var last_key: []const u8 = "";
     const vm = try rx.Vm.create(gpa, .{ .light = cache }, options);
     defer vm.destroy(gpa);
-    for (hash_cases) |c| {
+    const cases: []const HashCase = switch (options.version) {
+        .v1 => &hash_cases_v1,
+        .v2 => &hash_cases,
+    };
+    for (cases) |c| {
         if (!std.mem.eql(u8, c.key, last_key)) {
             cache.init(c.key);
             last_key = c.key;
@@ -120,14 +133,30 @@ test "hash test vectors (light mode, interpreter)" {
     try checkHashVectors(.{ .jit = false });
 }
 
+test "hash test vectors v1 (light mode, JIT)" {
+    try checkHashVectors(.{ .version = .v1 });
+}
+
+test "hash test vectors v1 (light mode, interpreter)" {
+    try checkHashVectors(.{ .jit = false, .version = .v1 });
+}
+
 test "interpreter matches the JIT on random inputs" {
+    try checkInterpreterMatchesJit(.v2);
+}
+
+test "interpreter matches the JIT on random inputs (v1)" {
+    try checkInterpreterMatchesJit(.v1);
+}
+
+fn checkInterpreterMatchesJit(version: rx.config.Version) !void {
     const gpa = testing.allocator;
     const cache = try rx.Cache.create(gpa, .{});
     defer cache.destroy(gpa);
     cache.init("interpreter vs JIT");
-    const jit_vm = try rx.Vm.create(gpa, .{ .light = cache }, .{});
+    const jit_vm = try rx.Vm.create(gpa, .{ .light = cache }, .{ .version = version });
     defer jit_vm.destroy(gpa);
-    const int_vm = try rx.Vm.create(gpa, .{ .light = cache }, .{ .jit = false });
+    const int_vm = try rx.Vm.create(gpa, .{ .light = cache }, .{ .jit = false, .version = version });
     defer int_vm.destroy(gpa);
 
     var prng = std.Random.DefaultPrng.init(0x5eed);

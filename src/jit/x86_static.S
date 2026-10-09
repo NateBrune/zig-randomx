@@ -1,5 +1,5 @@
 /*
- * Fixed code fragments copied by the x86-64 JIT (RandomX v2, hardware AES).
+ * Fixed code fragments copied by the x86-64 JIT (RandomX v1/v2, hardware AES).
  * Ported from RandomX's jit_compiler_x86_static.S and asm/*.inc
  * (Copyright (c) 2018-2019, tevador; BSD-3-Clause, see LICENSE).
  *
@@ -361,6 +361,77 @@ zrx_r7_add: .quad 9549104520008361294
 .global zrx_program_end
 .hidden zrx_program_end
 zrx_program_end:
+  nop
+
+/*
+ * RandomX v1 variants of the dataset read and loop store fragments:
+ * "mx" is mixed instead of "ma", and F is XORed with E instead of AES-mixed.
+ */
+.global zrx_v1_read_dataset
+.hidden zrx_v1_read_dataset
+zrx_v1_read_dataset:
+  mov ecx, ebp
+  and ecx, RANDOMX_DATASET_BASE_MASK
+
+  xor r8, qword ptr [rdi+rcx]
+  ror rbp, 32
+  xor rbp, rax
+  mov edx, ebp
+  and edx, RANDOMX_DATASET_BASE_MASK
+
+  prefetchnta byte ptr [rdi+rdx]
+  xor r9,  qword ptr [rdi+rcx+8]
+  xor r10, qword ptr [rdi+rcx+16]
+  xor r11, qword ptr [rdi+rcx+24]
+  xor r12, qword ptr [rdi+rcx+32]
+  xor r13, qword ptr [rdi+rcx+40]
+  xor r14, qword ptr [rdi+rcx+48]
+  xor r15, qword ptr [rdi+rcx+56]
+
+.global zrx_v1_read_dataset_sshash_init
+.hidden zrx_v1_read_dataset_sshash_init
+zrx_v1_read_dataset_sshash_init:
+  mov qword ptr [rsp+24], r8
+  mov qword ptr [rsp+32], r9
+  mov qword ptr [rsp+40], r10
+  mov qword ptr [rsp+48], r11
+  mov qword ptr [rsp+56], r12
+  mov qword ptr [rsp+64], r13
+  mov qword ptr [rsp+72], r14
+  mov qword ptr [rsp+80], r15
+  mov qword ptr [rsp+88], rbx
+  mov ebx, ebp
+  shr ebx, 6
+  and ebx, (RANDOMX_DATASET_BASE_MASK / 64)
+
+  ror rbp, 32
+  xor rbp, rax
+
+.global zrx_v1_loop_store
+.hidden zrx_v1_loop_store
+zrx_v1_loop_store:
+  mov rcx, qword ptr [rsp+16]
+  mov qword ptr [rcx+0], r8
+  mov qword ptr [rcx+8], r9
+  mov qword ptr [rcx+16], r10
+  mov qword ptr [rcx+24], r11
+  mov qword ptr [rcx+32], r12
+  mov qword ptr [rcx+40], r13
+  mov qword ptr [rcx+48], r14
+  mov qword ptr [rcx+56], r15
+  mov rcx, qword ptr [rsp+8]
+  xorpd xmm0, xmm4
+  xorpd xmm1, xmm5
+  xorpd xmm2, xmm6
+  xorpd xmm3, xmm7
+  movapd xmmword ptr [rcx+0], xmm0
+  movapd xmmword ptr [rcx+16], xmm1
+  movapd xmmword ptr [rcx+32], xmm2
+  movapd xmmword ptr [rcx+48], xmm3
+
+.global zrx_v1_end
+.hidden zrx_v1_end
+zrx_v1_end:
   nop
 
 /* MXCSR access for the VM (leaf functions, System V red zone). */

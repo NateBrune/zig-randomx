@@ -1,7 +1,7 @@
 # zig-randomx
 
 A port of [RandomX](https://github.com/tevador/RandomX), the proof-of-work
-algorithm used by Monero, to Zig. It implements **RandomX v2** with an
+algorithm used by Monero, to Zig. It implements **RandomX v1 and v2** with an
 **x86-64 JIT compiler** and an **interpreter**, and matches the official test
 vectors bit for bit.
 
@@ -33,6 +33,15 @@ const vm = try randomx.Vm.create(gpa, .{ .fast = dataset }, .{});
 Changing the key (`cache.init` again) is picked up automatically by
 light-mode VMs. A fast-mode dataset has to be rebuilt.
 
+RandomX v2 is the default. Monero mainnet (and so P2Pool) still uses v1
+until the v2 hard fork activates; select it per VM with `.version`. The
+cache and dataset are the same for both versions, so one dataset can serve
+VMs of either version:
+
+```zig
+const vm = try randomx.Vm.create(gpa, .{ .light = cache }, .{ .version = .v1 });
+```
+
 To run without the JIT, pass `.jit = false` to `Vm.create` and
 `Dataset.create`. Nothing executable is mapped then, so this works under
 policies that forbid writable and executable memory (strict SELinux
@@ -63,7 +72,7 @@ Requires Zig 0.16.
 | x86-64 JIT (programs, SuperscalarHash, dataset init) | ✓ |
 | Interpreter (`.jit = false`: programs, SuperscalarHash, dataset init) | ✓ |
 | Light mode (256 MiB) and fast mode (2 GiB dataset) | ✓ |
-| RandomX v1 | not implemented |
+| RandomX v1 (256-instruction programs, F^E store, unconditional CFROUND) | ✓ |
 | Non-x86-64 targets (ARM64, RISC-V) | not implemented: the interpreter's float ops and MXCSR handling are x86-64 asm |
 | Software AES | not implemented: needs a CPU with AES-NI |
 | Huge pages: explicit (`MAP_HUGETLB`), then transparent | ✓ |
@@ -81,7 +90,7 @@ reference implementation's `src/tests/tests.cpp`:
 - the SuperscalarHash generator (10 program hashes) and reciprocals
 - dataset items, from the cache and from the JIT dataset builder
 - `AesGenerator1R`
-- the five RandomX v2 hash vectors (1a–1e), through the JIT and the
+- the five RandomX v1 and five v2 hash vectors (1a–1e), through the JIT and the
   interpreter
 - the interpreter against the JIT on random inputs
 

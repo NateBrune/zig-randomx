@@ -1,5 +1,5 @@
 //! Fixed code fragments the x86-64 JIT copies into its buffer
-//! (jit_compiler_x86_static.S and asm/*.inc, RandomX v2 / hardware AES only).
+//! (jit_compiler_x86_static.S and asm/*.inc, RandomX v1/v2, hardware AES only).
 //!
 //! The fragments live in x86_static.S (attached to the module in build.zig)
 //! and are never executed in place: the JIT copies the bytes
@@ -28,6 +28,10 @@ extern const zrx_sshash_prefetch: u8;
 extern const zrx_sshash_end: u8;
 extern const zrx_sshash_init: u8;
 extern const zrx_program_end: u8;
+extern const zrx_v1_read_dataset: u8;
+extern const zrx_v1_read_dataset_sshash_init: u8;
+extern const zrx_v1_loop_store: u8;
+extern const zrx_v1_end: u8;
 
 fn span(comptime from: *const u8, comptime to: *const u8) []const u8 {
     const start = @intFromPtr(from);
@@ -73,4 +77,16 @@ pub fn sshashPrefetch() []const u8 {
 /// SuperscalarHash entry plus its constant block.
 pub fn sshashInit() []const u8 {
     return span(&zrx_sshash_init, &zrx_program_end);
+}
+
+/// RandomX v1 replacements for `readDataset`, `readDatasetLightInit` and
+/// `loopStore`.
+pub fn readDatasetV1() []const u8 {
+    return span(&zrx_v1_read_dataset, &zrx_v1_read_dataset_sshash_init);
+}
+pub fn readDatasetLightInitV1() []const u8 {
+    return span(&zrx_v1_read_dataset_sshash_init, &zrx_v1_loop_store);
+}
+pub fn loopStoreV1() []const u8 {
+    return span(&zrx_v1_loop_store, &zrx_v1_end);
 }

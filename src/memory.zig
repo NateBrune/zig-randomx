@@ -23,6 +23,9 @@ pub const Options = struct {
     /// When false, an interpreter runs them instead: much slower, but no
     /// executable memory is mapped. Used by `Vm.create` and `Dataset.create`.
     jit: bool = true,
+    /// RandomX version the VM hashes with. Only `Vm.create` reads it: the
+    /// cache and dataset are the same for both versions.
+    version: @import("config.zig").Version = .v2,
 };
 
 pub const PageKind = enum {

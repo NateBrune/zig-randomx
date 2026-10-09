@@ -1,4 +1,4 @@
-//! The RandomX v2 virtual machine, executed through the x86-64 JIT or the
+//! The RandomX (v1 or v2) virtual machine, executed through the x86-64 JIT or the
 //! interpreter (virtual_machine.cpp, vm_compiled.cpp, vm_compiled_light.cpp,
 //! vm_interpreted.cpp, randomx.cpp).
 
@@ -23,7 +23,7 @@ pub const hash_size = 32;
 
 const Program = extern struct {
     entropy: [16]u64 align(64),
-    instructions: [config.program_size]Instruction,
+    instructions: [config.program_max_size]Instruction,
 };
 
 comptime {
@@ -53,6 +53,7 @@ pub const Vm = struct {
     source: Source,
     /// Cache generation the SuperscalarHash code was compiled for (light mode).
     compiled_generation: u64,
+    version: config.Version,
 
     pub fn create(gpa: std.mem.Allocator, source: Source, options: memory.Options) !*Vm {
         if (!hasHardwareAes()) return error.AesNotSupported;
@@ -62,7 +63,9 @@ pub const Vm = struct {
         errdefer self.scratchpad_region.free();
         self.scratchpad = self.scratchpad_region.bytes;
         self.compiler = if (options.jit) try jit.Compiler.init() else null;
+        if (self.compiler) |*c| c.version = options.version;
         self.source = source;
+        self.version = options.version;
         self.compiled_generation = 0;
         return self;
     }
@@ -73,8 +76,8 @@ pub const Vm = struct {
         gpa.destroy(self);
     }
 
-    /// RandomX v2 hash of `input`. The cache (or the dataset's cache) must be
-    /// initialized; re-initializing it with a new key is picked up here.
+    /// RandomX hash of `input`, for `Options.version`. The cache (or the
+    /// dataset's cache) must be initialized; re-initializing it with a new key is picked up here.
     pub fn hash(self: *Vm, input: []const u8, out: *[hash_size]u8) void {
         switch (self.source) {
             .light => |cache| {
@@ -107,18 +110,22 @@ pub const Vm = struct {
     fn run(self: *Vm, seed: *const [64]u8) void {
         aes.fill4Rx4(seed, std.mem.asBytes(&self.program));
         self.initialize();
+        const instructions = self.program.instructions[0..self.version.programSize()];
         const compiler = if (self.compiler) |*c| c else {
-            interpreter.decode(&self.bytecode, &self.program.instructions);
-            interpreter.execute(&self.bytecode, &self.reg, self.mem.ma, self.mem.mx, self.pcfg, self.scratchpad, self.source, self.dataset_offset, config.program_iterations);
+            const bytecode = self.bytecode[0..instructions.len];
+            interpreter.decode(bytecode, instructions);
+            switch (self.version) {
+                inline else => |v| interpreter.execute(v, bytecode, &self.reg, self.mem.ma, self.mem.mx, self.pcfg, self.scratchpad, self.source, self.dataset_offset, config.program_iterations),
+            }
             return;
         };
         switch (self.source) {
             .fast => |ds| {
-                compiler.generateProgram(&self.program.instructions, self.pcfg);
+                compiler.generateProgram(instructions, self.pcfg);
                 self.mem.memory = ds.memory.ptr + self.dataset_offset;
             },
             .light => |cache| {
-                compiler.generateProgramLight(&self.program.instructions, self.pcfg, self.dataset_offset);
+                compiler.generateProgramLight(instructions, self.pcfg, self.dataset_offset);
                 self.mem.memory = cache.bytes().ptr;
             },
         }

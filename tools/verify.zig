@@ -2,7 +2,7 @@
 //! `key_hex input_hex hash_hex` ("-" for empty) on stdin, recomputes each
 //! hash and reports mismatches.
 //!
-//!   ref_hashes 20 500 1 | randomx-verify [--fast] [--interpret] [--threads N]
+//!   ref_hashes 20 500 1 | randomx-verify [--fast] [--interpret] [--v1] [--threads N]
 //!   randomx-verify --dump-dataset KEY [--interpret] [--threads N] > dataset.bin
 //!   ref_superscalar 100000 1000000 1 | randomx-verify --superscalar
 
@@ -21,6 +21,7 @@ pub fn main(init: std.process.Init) !u8 {
     while (i < args.len) : (i += 1) {
         if (std.mem.eql(u8, args[i], "--fast")) fast = true;
         if (std.mem.eql(u8, args[i], "--interpret")) options.jit = false;
+        if (std.mem.eql(u8, args[i], "--v1")) options.version = .v1;
         if (std.mem.eql(u8, args[i], "--dump-dataset") and i + 1 < args.len) {
             i += 1;
             dump_key = args[i];

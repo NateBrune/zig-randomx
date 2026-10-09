@@ -1,4 +1,4 @@
-//! RandomX v2 parameters (configuration.h in the reference implementation).
+//! RandomX parameters (configuration.h in the reference implementation).
 
 /// Cache size in KiB (Argon2 blocks).
 pub const argon_memory = 262144;
@@ -13,13 +13,31 @@ pub const dataset_base_size: u64 = 2147483648;
 pub const dataset_extra_size: u64 = 33554368;
 pub const dataset_item_size = 64;
 
-pub const program_size = 384; // v2
+/// RandomX v1 runs 256-instruction programs, v2 runs 384. Program buffers are
+/// always sized for the larger one.
+pub const program_size_v1 = 256;
+pub const program_size_v2 = 384;
+pub const program_max_size = program_size_v2;
 pub const program_iterations = 2048;
 pub const program_count = 8;
 
 pub const scratchpad_l3 = 2097152;
 pub const scratchpad_l2 = 262144;
 pub const scratchpad_l1 = 16384;
+
+/// RandomX version. Monero used v1 from its November 2019 fork; v2 changes
+/// the program size, CFROUND, the F/E mix and which register is mixed.
+pub const Version = enum {
+    v1,
+    v2,
+
+    pub fn programSize(v: Version) usize {
+        return switch (v) {
+            .v1 => program_size_v1,
+            .v2 => program_size_v2,
+        };
+    }
+};
 
 pub const jump_bits = 8;
 pub const jump_offset = 8;

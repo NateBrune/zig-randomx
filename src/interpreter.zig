@@ -1,4 +1,4 @@
-//! RandomX v2 program interpreter (bytecode_machine.cpp, vm_interpreted.cpp).
+//! RandomX v1/v2 program interpreter (bytecode_machine.cpp, vm_interpreted.cpp).
 //!
 //! Runs the same programs as the x86-64 JIT without generating machine
 //! code, so it works where executable memory is forbidden (strict SELinux
@@ -48,7 +48,7 @@ pub const Bytecode = struct {
     target: u16 = 0,
 };
 
-pub const Program = [config.program_size]Bytecode;
+pub const Program = [config.program_max_size]Bytecode;
 
 inline fn signExtend(x: u32) u64 {
     return @bitCast(@as(i64, @as(i32, @bitCast(x))));
@@ -60,7 +60,8 @@ fn memMask(instr: Instruction) u32 {
 
 /// Decodes `prog`, tracking register writes for CBRANCH targets exactly as
 /// the JIT does.
-pub fn decode(out: *Program, prog: *const [config.program_size]Instruction) void {
+pub fn decode(out: []Bytecode, prog: []const Instruction) void {
+    std.debug.assert(out.len == prog.len);
     var register_usage: [8]i32 = @splat(-1);
     for (prog, 0..) |instr, idx| {
         const bc = &out[idx];
@@ -225,7 +226,8 @@ inline fn smulh(a: u64, b: u64) u64 {
 /// program function. `reg.a` must be set; `reg.r`, `reg.f` and
 /// `reg.e` are written. `ma` and `mx` come from the program's entropy.
 pub fn execute(
-    prog: *const Program,
+    comptime version: config.Version,
+    prog: []const Bytecode,
     reg: *RegisterFile,
     ma_init: u32,
     mx_init: u32,
@@ -243,7 +245,9 @@ pub fn execute(
     for (&a, 0..) |*x, i| x.* = float(.{ reg.a[2 * i], reg.a[2 * i + 1] });
     const e_or: U = .{ pcfg.e_mask[0], pcfg.e_mask[1] };
 
-    // Dataset addresses: `ma` is read now, `mx` two iterations later (v2).
+    // Dataset addresses: `ma` is read now. v1 mixes `mx` and prefetches it for
+    // the next iteration; v2 mixes `ma` instead, so it is read two iterations
+    // later.
     var ma = ma_init;
     var mx = mx_init;
     var sp_addr0: u32 = mx & config.scratchpad_l3_mask64;
@@ -298,7 +302,7 @@ pub fn execute(
                 .cfround => {
                     const v = std.math.rotr(u64, r[bc.src], bc.shift);
                     // v2: only when bits 2-5 are zero.
-                    if ((v >> 2) & 0xF == 0) zrx_set_mxcsr(mxcsr_base | @as(u32, @intCast(v & 3)) << 13);
+                    if (version == .v1 or (v >> 2) & 0xF == 0) zrx_set_mxcsr(mxcsr_base | @as(u32, @intCast(v & 3)) << 13);
                 },
                 .istore => {
                     const addr = (@as(u32, @truncate(r[bc.dst])) +% bc.imm32) & bc.mask;
@@ -312,25 +316,36 @@ pub fn execute(
         const t: u32 = @truncate(r[pcfg.read_reg[2]] ^ r[pcfg.read_reg[3]]);
         const item = readItem(source, dataset_offset, ma & config.cache_line_align_mask);
         for (&r, item) |*x, y| x.* ^= y;
-        ma ^= t;
+        switch (version) {
+            .v1 => mx ^= t,
+            .v2 => ma ^= t,
+        }
         std.mem.swap(u32, &ma, &mx);
 
         const next = r[pcfg.read_reg[0]] ^ r[pcfg.read_reg[1]];
         for (r, 0..) |x, i| std.mem.writeInt(u64, sp[sp_addr1 + 8 * i ..][0..8], x, .little);
-        // v2: F is mixed with E by AES rounds before it is stored.
-        var blocks: [4]Block = undefined;
-        for (&blocks, f) |*b, x| b.* = Block.fromBytes(std.mem.asBytes(&x));
-        for (e) |k| {
-            const key = Block.fromBytes(std.mem.asBytes(&k));
-            blocks[0] = blocks[0].encrypt(key);
-            blocks[1] = blocks[1].decrypt(key);
-            blocks[2] = blocks[2].encrypt(key);
-            blocks[3] = blocks[3].decrypt(key);
-        }
-        for (&f, blocks, 0..) |*x, b, i| {
-            const bytes = b.toBytes();
-            x.* = @bitCast(bytes);
-            sp[sp_addr0 + 16 * i ..][0..16].* = bytes;
+        switch (version) {
+            .v1 => for (&f, e, 0..) |*x, k, i| {
+                x.* = float(bits(x.*) ^ bits(k));
+                sp[sp_addr0 + 16 * i ..][0..16].* = @bitCast(x.*);
+            },
+            // v2: F is mixed with E by AES rounds before it is stored.
+            .v2 => {
+                var blocks: [4]Block = undefined;
+                for (&blocks, f) |*b, x| b.* = Block.fromBytes(std.mem.asBytes(&x));
+                for (e) |k| {
+                    const key = Block.fromBytes(std.mem.asBytes(&k));
+                    blocks[0] = blocks[0].encrypt(key);
+                    blocks[1] = blocks[1].decrypt(key);
+                    blocks[2] = blocks[2].encrypt(key);
+                    blocks[3] = blocks[3].decrypt(key);
+                }
+                for (&f, blocks, 0..) |*x, b, i| {
+                    const bytes = b.toBytes();
+                    x.* = @bitCast(bytes);
+                    sp[sp_addr0 + 16 * i ..][0..16].* = bytes;
+                }
+            },
         }
 
         sp_addr0 = @as(u32, @truncate(next)) & config.scratchpad_l3_mask64;

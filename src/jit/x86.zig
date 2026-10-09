@@ -1,4 +1,4 @@
-//! x86-64 JIT compiler for RandomX v2 programs and SuperscalarHash
+//! x86-64 JIT compiler for RandomX v1/v2 programs and SuperscalarHash
 //! (jit_compiler_x86.cpp). Emits the same machine code as the reference.
 //!
 //! Register allocation inside generated code:
@@ -25,7 +25,7 @@ fn alignUp(x: usize, a: usize) usize {
     return (x + a - 1) / a * a;
 }
 
-pub const randomx_code_size = alignUp(code_align + max_instr_code_size * config.program_size, code_align);
+pub const randomx_code_size = alignUp(code_align + max_instr_code_size * config.program_max_size, code_align);
 const superscalar_size = alignUp(code_align + (superscalar_program_header + max_superscalar_instr_size * config.superscalar_max_size) * config.cache_accesses, code_align);
 pub const code_size = randomx_code_size + superscalar_size;
 pub const superscalar_hash_offset = randomx_code_size;
@@ -62,8 +62,10 @@ pub const DatasetInitFn = *const fn (*const [*]const u8, [*]u8, u64, u64) callco
 pub const Compiler = struct {
     code: []align(std.heap.page_size_min) u8,
     pos: usize = 0,
-    instruction_offsets: [config.program_size]i32 = undefined,
+    instruction_offsets: [config.program_max_size]i32 = undefined,
     register_usage: [8]i32 = undefined,
+    /// RandomX version of the programs generated next.
+    version: config.Version = .v2,
 
     pub fn init() !Compiler {
         const code = try std.posix.mmap(
@@ -125,7 +127,10 @@ pub const Compiler = struct {
     /// Program reading the full dataset.
     pub fn generateProgram(self: *Compiler, prog: []Instruction, pcfg: ProgramConfig) void {
         self.generatePrologue(prog, pcfg);
-        self.emit(static.readDataset());
+        self.emit(switch (self.version) {
+            .v1 => static.readDatasetV1(),
+            .v2 => static.readDataset(),
+        });
         self.generateEpilogue(pcfg);
     }
 
@@ -133,7 +138,10 @@ pub const Compiler = struct {
     /// `generateSuperscalarHash` first.
     pub fn generateProgramLight(self: *Compiler, prog: []Instruction, pcfg: ProgramConfig, dataset_offset: u64) void {
         self.generatePrologue(prog, pcfg);
-        self.emit(static.readDatasetLightInit());
+        self.emit(switch (self.version) {
+            .v1 => static.readDatasetLightInitV1(),
+            .v2 => static.readDatasetLightInit(),
+        });
         self.emit(&.{ 0x81, 0xc3 }); // add ebx, imm32
         self.emit32(@intCast(dataset_offset / config.dataset_item_size));
         self.emitByte(0xe8); // call
@@ -174,7 +182,10 @@ pub const Compiler = struct {
         self.emit(&.{ 0x49, 0x33 }); // xor rax, r64
         self.emitByte(0xc0 + pcfg.read_reg[1]);
         self.emit(static.prefetchScratchpad());
-        self.emit(static.loopStore());
+        self.emit(switch (self.version) {
+            .v1 => static.loopStoreV1(),
+            .v2 => static.loopStore(),
+        });
         self.emit(&.{ 0x83, 0xeb, 0x01 }); // sub ebx, 1
         self.emit(&.{ 0x0f, 0x85 }); // jnz loop
         self.emitI32(@as(i64, @intCast(static.prologue().len)) - @as(i64, @intCast(self.pos + 4)));
@@ -512,9 +523,11 @@ pub const Compiler = struct {
                 }
                 const set_mxcsr = [_]u8{ 0x25, 0x00, 0x60, 0x00, 0x00, 0x0d, 0xc0, 0x9f, 0x00, 0x00, 0x89, 0x04, 0x24, 0x0f, 0xae, 0x14, 0x24 };
                 // v2: change the rounding mode only when bits 13-18 of rax are zero.
-                self.emit(&.{ 0xa9, 0x00, 0x80, 0x07, 0x00 }); // test eax, 0x78000
-                self.emitByte(0x75); // jnz short
-                self.emitByte(set_mxcsr.len);
+                if (self.version == .v2) {
+                    self.emit(&.{ 0xa9, 0x00, 0x80, 0x07, 0x00 }); // test eax, 0x78000
+                    self.emitByte(0x75); // jnz short
+                    self.emitByte(set_mxcsr.len);
+                }
                 self.emit(&set_mxcsr); // and eax, 0x6000; or eax, 0x9fc0; mov [rsp], eax; ldmxcsr [rsp]
             },
             .istore => {

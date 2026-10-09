@@ -1,18 +1,27 @@
-//! Verifies the RandomX v2 test vectors and measures single-thread hash speed.
+//! Verifies the RandomX test vectors and measures single-thread hash speed.
 //!
-//!   randomx-bench [--light] [--interpret] [--hashes N] [--threads N] [--no-huge-pages] [--chain]
+//!   randomx-bench [--light] [--interpret] [--v1] [--hashes N] [--threads N] [--no-huge-pages] [--chain]
 //!
 //! --interpret runs programs (and dataset initialization) without the JIT.
+//! --v1 hashes with RandomX v1 instead of v2.
 //! --chain hashes sequentially (x = hash(x)), as a time-lock would; the
 //! default hashes independent nonces, one at a time (no pipelining).
 
 const std = @import("std");
 const randomx = @import("randomx");
 
-const vectors = [_]struct { input: []const u8, want: []const u8 }{
+const Vector = struct { input: []const u8, want: []const u8 };
+
+const vectors = [_]Vector{
     .{ .input = "This is a test", .want = "22ec6b861b3eb23686b2efbad69513c967ecfce80983df66c9c5b4fbfb4cdb6f" },
     .{ .input = "Lorem ipsum dolor sit amet", .want = "9e2c772c12fd48f93c14c97fdc89d556264d9100597023f44d9163e279012ecf" },
     .{ .input = "sed do eiusmod tempor incididunt ut labore et dolore magna aliqua", .want = "4d6b063a1a603751d525f18a171336a4002f2f06df6c17e4b25fe17e17796e42" },
+};
+
+const vectors_v1 = [_]Vector{
+    .{ .input = "This is a test", .want = "639183aae1bf4c9a35884cb46b09cad9175f04efd7684e7262a0ac1c2f0b4e3f" },
+    .{ .input = "Lorem ipsum dolor sit amet", .want = "300a0adb47603dedb42228ccb2b211104f4da45af709cd7547cd049e9489c969" },
+    .{ .input = "sed do eiusmod tempor incididunt ut labore et dolore magna aliqua", .want = "c36d4ed4191e617309867ed66a443be4075014e2b061bcdaf9ce7b721d2b77a8" },
 };
 
 pub fn main(init: std.process.Init) !u8 {
@@ -31,8 +40,8 @@ pub fn main(init: std.process.Init) !u8 {
             light = true;
         } else if (std.mem.eql(u8, args[i], "--interpret")) {
             options.jit = false;
-        } else if (std.mem.eql(u8, args[i], "--interpret")) {
-            options.jit = false;
+        } else if (std.mem.eql(u8, args[i], "--v1")) {
+            options.version = .v1;
         } else if (std.mem.eql(u8, args[i], "--chain")) {
             chain = true;
         } else if (std.mem.eql(u8, args[i], "--no-huge-pages")) {
@@ -75,7 +84,11 @@ pub fn main(init: std.process.Init) !u8 {
     defer vm.destroy(gpa);
 
     var ok = true;
-    for (vectors) |v| {
+    const checks: []const Vector = switch (options.version) {
+        .v1 => &vectors_v1,
+        .v2 => &vectors,
+    };
+    for (checks) |v| {
         var h: [32]u8 = undefined;
         vm.hash(v.input, &h);
         var want: [32]u8 = undefined;
@@ -107,7 +120,8 @@ pub fn main(init: std.process.Init) !u8 {
         }
     }
     const ms = since(io, &t);
-    try out.print("{s} mode, {s}, {s}: {d} hashes in {d} ms = {d:.1} H/s on one thread\n", .{
+    try out.print("{s}, {s} mode, {s}, {s}: {d} hashes in {d} ms = {d:.1} H/s on one thread\n", .{
+        @tagName(options.version),
         if (light) "light" else "fast",
         if (options.jit) "JIT" else "interpreter",
         if (chain) "chained" else "independent",
